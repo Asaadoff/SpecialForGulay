@@ -646,8 +646,9 @@
       -webkit-backdrop-filter: blur(32px) saturate(160%);
       border: 1px solid rgba(255, 255, 255, .075);
       border-radius: 22px;
-      padding: clamp(36px, 7.5vw, 60px) clamp(32px, 7vw, 60px);
-      width: min(94vw, 760px);
+      /* tighter padding on mobile so text has more horizontal room */
+      padding: clamp(28px, 6vw, 56px) clamp(20px, 5vw, 52px);
+      width: min(96vw, 760px);
       box-shadow: 0 44px 110px rgba(0, 0, 0, .68), 0 0 0 .5px rgba(255, 255, 255, .025) inset;
       text-align: center;
       overflow: hidden;
@@ -679,19 +680,25 @@
       font-family: 'Cormorant Garamond', serif;
       font-style: italic;
       font-weight: 500;
-      font-size: clamp(17px, 4.2vw, 31px);
-      line-height: 1.85;
+      font-size: clamp(15px, 3.8vw, 28px);
+      line-height: 1.95;
       color: #fafafa;
       letter-spacing: .03em;
-      text-shadow: 0 0 50px rgba(255, 0, 127, .1), 0 2px 18px rgba(0, 0, 0, .5)
+      text-shadow: 0 0 50px rgba(255, 0, 127, .1), 0 2px 18px rgba(0, 0, 0, .5);
+      word-break: keep-all;
+      overflow-wrap: normal;
     }
-
-    .ch {
+    /* word-level wrapper: wraps only between words, never mid-word */
+    .sw {
       display: inline-block;
+      white-space: nowrap;
+    }
+    /* character inside a word — stays inline, never triggers wrap */
+    .ch {
+      display: inline;
       opacity: 0;
       filter: blur(12px);
-      transform: translateY(20px);
-      will-change: opacity, filter, transform
+      will-change: opacity, filter;
     }
 
     /* ════════════════════════════════════════
@@ -1445,7 +1452,7 @@
        STAGE 4  —  CINEMATIC TYPOGRAPHY SLIDES
     ══════════════════════════════════════════════════════════ */
     const SLIDES = [
-      'Gözlərindəki işığın və qəlbindəki sevginin heç vaxt     sönmədiyi, birlikdə qeyd edəcəyimiz neçə belə gözəl     illərimiz olsun.',
+      'Gözlərindəki işığın və qəlbindəki sevginin heç vaxt sönmədiyi, birlikdə qeyd edəcəyimiz neçə belə gözəl illərimiz olsun.',
       'Sən mənim bu dünyadakı səs-küyün içində tapdığım ən gözəl sükutsan.',
     ];
 
@@ -1459,17 +1466,29 @@
     function splitChars(text) {
       const el = document.getElementById('slideInner');
       el.innerHTML = '';
-      [...text].forEach(ch => {
-        if (ch === ' ') {
-          const sp = document.createElement('span');
-          sp.innerHTML = '&nbsp;'; sp.style.display = 'inline-block';
-          el.appendChild(sp);
-        } else {
+
+      // Split into words, wrap each word in .sw so line-break only happens BETWEEN words
+      const words = text.split(' ');
+      words.forEach((word, wi) => {
+        const wordSpan = document.createElement('span');
+        wordSpan.className = 'sw';
+
+        // Each character inside the word gets .ch for the blur-reveal animation
+        [...word].forEach(ch => {
           const s = document.createElement('span');
-          s.className = 'ch'; s.textContent = ch;
-          el.appendChild(s);
+          s.className = 'ch';
+          s.textContent = ch;
+          wordSpan.appendChild(s);
+        });
+
+        el.appendChild(wordSpan);
+
+        // Add a real space between words (not inside .sw so wrapping happens here)
+        if (wi < words.length - 1) {
+          el.appendChild(document.createTextNode(' '));
         }
       });
+
       return el.querySelectorAll('.ch');
     }
 
@@ -1478,15 +1497,17 @@
       const chars = splitChars(SLIDES[idx]);
 
       // Letter-by-letter blur reveal
+      // NOTE: .ch is display:inline so translateY won't work — use only opacity+filter
       gsap.fromTo(chars,
-        { opacity: 0, filter: 'blur(12px)', y: 20 },
+        { opacity: 0, filter: 'blur(10px)' },
         {
-          opacity: 1, filter: 'blur(0px)', y: 0,
-          duration: 0.95, ease: 'power2.out',
-          stagger: { amount: SLIDES[idx].length * 0.038 + 0.6, from: 'start' }
+          opacity: 1, filter: 'blur(0px)',
+          duration: 0.75, ease: 'power2.out',
+          stagger: { amount: Math.min(chars.length * 0.028 + 0.4, 2.8), from: 'start' }
         });
 
-      const holdMs = SLIDES[idx].length * 40 + 3400;
+      // Hold time: enough to read comfortably on mobile
+      const holdMs = Math.min(chars.length * 32 + 2800, 7000);
 
       // Light leak flash between slide 0 → slide 1
       if (idx === 0) {
@@ -1500,12 +1521,12 @@
       // Blur dissolve out
       setTimeout(() => {
         gsap.to(chars, {
-          opacity: 0, filter: 'blur(10px)', y: -12,
-          duration: 0.88, ease: 'power2.in',
-          stagger: { amount: 0.55, from: 'start' },
+          opacity: 0, filter: 'blur(8px)',
+          duration: 0.7, ease: 'power2.in',
+          stagger: { amount: 0.4, from: 'start' },
           onComplete: () => runSlide(idx + 1),
         });
-      }, holdMs + 200);
+      }, holdMs + 150);
     }
 
     /* ══════════════════════════════════════════════════════════
@@ -1545,38 +1566,40 @@
       const cx = vw / 2;
       const cy = vh * 0.47;
 
-      // ── FIX: tighter clamp so heart never clips on small phones ──
-      const heartScale = clamp(12, Math.min(vw, vh) * 0.0225, 35);
-      // Font scaled to heart — small enough that words pack cleanly
-      const fs = clamp(8.5, vw * 0.016, 13.5);
+      // Scale: fill the screen nicely on any phone size
+      // heartScale drives both the shape size and the safe margins
+      const minSide = Math.min(vw, vh);
+      const heartScale = clamp(10, minSide * 0.027, 38);
 
-      // Accurate word-width measurement
+      // Font: small enough to pack many words, large enough to read
+      const fs = clamp(7.5, minSide * 0.018, 13);
+
+      // Accurate word-width measurement via offscreen canvas
       const offcv = document.createElement('canvas');
-      const octx = offcv.getContext('2d');
-      octx.font = `800 ${fs}px Montserrat,sans-serif`;
+      const octx  = offcv.getContext('2d');
+      octx.font   = `800 ${fs}px Montserrat,sans-serif`;
 
-      // Sample heart curve densely
-      const SAMPLES = 700;
-      const rawPts = [];
+      // Dense sampling — more points = more candidate slots
+      const SAMPLES = 900;
+      const rawPts  = [];
       for (let i = 0; i < SAMPLES; i++) {
-        const t = (i / SAMPLES) * Math.PI * 2;
-        const p = heartPt(t);
+        const t  = (i / SAMPLES) * Math.PI * 2;
+        const p  = heartPt(t);
         const px = cx + p.x * heartScale;
         const py = cy + p.y * heartScale;
-        // ── FIX: skip points within margin of viewport edge ──
-        const M = fs * 3.5;
+        // Keep a safe margin from viewport edges
+        const M  = fs * 2;
         if (px > M && px < vw - M && py > M && py < vh - M) {
           rawPts.push({ x: px, y: py });
         }
       }
-      // Shuffle for organic placement
       rawPts.sort(() => Math.random() - 0.5);
 
-      const placed = [];
-      const rects = [];
-      const CG = heartScale * 1.12;   // centre guard radius
-      const MAX_WORDS = 40;
-      const PAD = 8;
+      const placed   = [];
+      const rects    = [];
+      const CG       = heartScale * 0.95;  // centre guard — slightly smaller for better fill
+      const MAX_WORDS = 56;                // more words = fuller heart
+      const PAD       = 4;                 // tighter padding so words pack closer
 
       for (let pi = 0; pi < rawPts.length; pi++) {
         if (placed.length >= MAX_WORDS) break;
