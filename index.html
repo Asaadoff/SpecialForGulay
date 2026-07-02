@@ -906,20 +906,16 @@
     }
 
     /* ══════════════════════════════════════════════════════════
-       AUDIO ENGINE
+       AUDIO ENGINE  — minimal, bulletproof, mobile-safe
        ─────────────────────────────────────────────────────────
-       iOS Safari Rule: only ONE .play() per user-gesture event.
-       Solution: pre-unlock t2 inside the password/gate touch,
-       then resume() it in crossFade instead of calling play()
-       cold. This guarantees sound on every mobile browser.
-       ─────────────────────────────────────────────────────────
-       Flow:
-         1. User touches anywhere (password input) → unlockAll()
-            calls t1.play().then(pause) and t2.play().then(pause)
-            inside the gesture so both elements are "unlocked"
-         2. Gate tap → t1.play() (already unlocked, works fine)
-         3. Envelope tap → crossFade() sets t2.currentTime=124
-            then calls t2.play() — succeeds because t2 is unlocked
+       Strategy:
+         • NO play/pause tricks — they cause audible glitches
+         • A silent 1-frame AudioContext unlocks iOS on first
+           gesture, WITHOUT touching any audio element
+         • t1 plays normally after gate tap
+         • t2 starts at 124s when envelope is tapped
+         • crossFade fades t1 OUT while t2 is already playing
+         • t2 loops 124s-168s via timeupdate
     ══════════════════════════════════════════════════════════ */
     const t1   = document.getElementById('t1');
     const t2   = document.getElementById('t2');
@@ -927,44 +923,60 @@
     const sfxC = document.getElementById('sfxC');
 
     t1.volume   = 1;
-    t2.volume   = 1;   // full volume — never start at 0 on iOS
+    t2.volume   = 1;
     sfxR.volume = 0.55;
     sfxC.volume = 0.68;
 
-    let _audioUnlocked = false;
-
-    // Call once from the very first user gesture (password submit button)
-    // Silently plays & immediately pauses every audio element to unlock them
+    // Unlock iOS audio engine with a silent AudioContext oscillator.
+    // Does NOT touch any audio element — zero audible side-effects.
+    let _unlocked = false;
     function unlockAll() {
-      if (_audioUnlocked) return;
-      _audioUnlocked = true;
-      [t1, t2, sfxR, sfxC].forEach(el => {
-        el.play().then(() => el.pause()).catch(() => {});
-      });
+      if (_unlocked) return;
+      _unlocked = true;
+      try {
+        const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+        const osc  = ctx.createOscillator();
+        const gain = ctx.createGain();
+        gain.gain.value = 0;          // completely silent
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(0);
+        osc.stop(ctx.currentTime + 0.001);
+        ctx.resume().catch(() => {});
+      } catch (_) {}
     }
 
-    // Track-2 custom loop: 124 s → 168 s
+    // t2 custom loop: 124 s → 168 s
     t2.addEventListener('timeupdate', () => {
       if (t2.currentTime >= 168) t2.currentTime = 124;
     });
 
-    // crossFade: t1 fades out, t2 starts from 124 s
-    // t2 is already unlocked by unlockAll(), so play() never fails
+    // crossFade: start t2 at 124s, fade t1 to silence
+    let _fading = false;
     function crossFade() {
-      t1.volume   = 1;   // ensure t1 starts from full before fading
-      t2.volume   = 1;
+      if (_fading) return;
+      _fading = true;
+
       t2.currentTime = 124;
+      t2.volume      = 1;
       t2.play().catch(() => {});
 
-      const step = () => {
-        t1.volume = Math.max(0, t1.volume - 0.022);
-        if (t1.volume > 0) requestAnimationFrame(step);
-        else { t1.pause(); t1.currentTime = 0; }
+      // Fade t1 out over ~1.5 seconds
+      const STEP = 0.018;
+      const fade = () => {
+        if (t1.volume > STEP) {
+          t1.volume -= STEP;
+          requestAnimationFrame(fade);
+        } else {
+          t1.volume = 0;
+          t1.pause();
+          t1.currentTime = 0;
+        }
       };
-      requestAnimationFrame(step);
+      requestAnimationFrame(fade);
     }
 
-    function unlockAudio() {}   // kept for legacy call-sites
+    function unlockAudio() {}  // legacy no-op
 
     /* ══════════════════════════════════════════════════════════
        GLOBAL POINTER  (gravity for stars + trail)
@@ -1125,10 +1137,7 @@
       stage.style.opacity = '1';
 
       function attempt() {
-        // unlockAll() MUST be called synchronously inside this
-        // touch/click handler — this is the gesture that unlocks
-        // audio on iOS Safari for ALL subsequent play() calls
-        unlockAll();
+        unlockAll();  // silent AudioContext unlock — no audible effect
         haptic([10]);
         const val = input.value.trim();
         if (val === CORRECT) {
@@ -1172,7 +1181,7 @@
       });
 
       document.getElementById('s0').addEventListener('click', async () => {
-        unlockAll();          // belt-and-suspenders: unlock inside this gesture too
+        unlockAll();
         haptic([10, 18, 10]);
         t1.play().catch(() => { });
         await hideStage('s0', 520);
@@ -1348,11 +1357,10 @@
         if (opened) return;
         opened = true;
         haptic([10, 30, 20, 30, 10]);
-        // sfxR already unlocked — defer 80ms so iOS gives t2.play() the gesture slot
         sfxR.currentTime = 0;
-        setTimeout(() => sfxR.play().catch(() => {}), 80);
+        sfxR.play().catch(() => {});
         startVizDraw();
-        crossFade();   // t2.play() runs inside the gesture tick — highest priority
+        crossFade();
 
         gsap.to('#envSvgWrap', { rotationX: 14, y: -22, duration: 0.48, ease: 'power2.out' });
         gsap.to('#envSvgWrap', { scale: 0.65, opacity: 0, y: -90, duration: 0.85, delay: 0.46, ease: 'power3.in' });
